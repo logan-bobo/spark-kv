@@ -16,6 +16,7 @@ doctest = false
 
 
 [dependencies]
+clap = { version = "4.5.32", features = ["derive"] }
 
 
 [dev-dependencies]
