@@ -4,7 +4,7 @@ use std::process::exit;
 const UNIMPLEMENTED: &str = "unimplemented";
 
 #[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
+#[command(name = env!("CARGO_PKG_NAME"), version, about, long_about = None)]
 struct Args {
     get: Option<String>,
     rm: Option<String>,
