@@ -25,17 +25,17 @@ fn main() {
     }
 }
 
-fn get_handler(value: &String) -> &str {
+fn get_handler(value: &str) -> &str {
     eprintln!("{}", UNIMPLEMENTED);
     exit(1);
 }
 
-fn set_handler(value: &Vec<String>) -> &str {
+fn set_handler(value: &[String]) -> &str {
     eprintln!("{}", UNIMPLEMENTED);
     exit(1);
 }
 
-fn rm_handler(value: &String) -> &str {
+fn rm_handler(value: &str) -> &str {
     eprintln!("{}", UNIMPLEMENTED);
     exit(1);
 }
