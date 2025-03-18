@@ -1,5 +1,5 @@
 # spark-kv
-A simple persistent key value store, with an in memory index implemented in Rust.
+A simple persistent key value store, with an in memory index, implemented in Rust.
 
 # Goals of this project
 The goal of this project is to improve my [system programing](https://en.wikipedia.org/wiki/Systems_programming) through building a networked key-value database, with multithreading and asynchronous I/O. Exploring...
