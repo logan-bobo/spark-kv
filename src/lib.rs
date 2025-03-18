@@ -3,7 +3,11 @@
 //! a simple implementation of a key value store in memory that supports
 //! key value setting, retrival and removal.
 
-use std::collections::HashMap;
+use std::error;
+use std::{collections::HashMap, path::Path};
+
+/// wrap a generic return type with a dynamic error
+pub type Result<T> = std::result::Result<T, Box<dyn error::Error>>;
 
 /// [KvStore] holds key value pairs in memory that have set, get and removal
 /// methods available
@@ -47,8 +51,9 @@ impl KvStore {
     ///
     /// assert_eq!(value1, Some("Val1".to_string()));
     /// ```
-    pub fn set(&mut self, key: String, value: String) {
+    pub fn set(&mut self, key: String, value: String) -> Result<()> {
         self.data.insert(key, value);
+        Ok(())
     }
 
     /// allows a caller to retrieve a value for a given key
@@ -69,8 +74,8 @@ impl KvStore {
     /// assert_eq!(value1, Some("Val1".to_string()));
     /// assert_eq!(no_value, None);
     /// ```
-    pub fn get(&self, key: String) -> Option<String> {
-        self.data.get(&key).cloned()
+    pub fn get(&mut self, key: String) -> Result<Option<String>> {
+        Ok(self.data.get(&key).cloned())
     }
 
     /// removes a given key, if the key does not exist
@@ -88,7 +93,13 @@ impl KvStore {
     ///
     /// assert_eq!(value1, None);
     /// ```
-    pub fn remove(&mut self, key: String) {
+    pub fn remove(&mut self, key: String) -> Result<()> {
         self.data.remove(&key);
+        Ok(())
+    }
+
+    /// opens a given path
+    pub fn open(path: &Path) -> Result<KvStore> {
+        Ok(KvStore::default())
     }
 }
