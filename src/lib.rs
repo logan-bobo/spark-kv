@@ -3,16 +3,18 @@
 //! a simple implementation of a key value store in memory that supports
 //! key value setting, retrival and removal.
 
-use std::error;
+use failure::Error;
+use serde::Serialize;
 use std::{collections::HashMap, path::Path};
 
 /// wrap a generic return type with a dynamic error
-pub type Result<T> = std::result::Result<T, Box<dyn error::Error>>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 /// [KvStore] holds key value pairs in memory that have set, get and removal
 /// methods available
 pub struct KvStore {
     data: HashMap<String, String>,
+    wal: String,
 }
 
 impl Default for KvStore {
@@ -34,6 +36,7 @@ impl KvStore {
     pub fn new() -> Self {
         Self {
             data: HashMap::new(),
+            wal: String::new(),
         }
     }
 
@@ -55,7 +58,14 @@ impl KvStore {
     /// # }
     /// ```
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
+        let serialized_command =
+            serde_json::to_string(&WalCommand::new(KvAction::SET, key.clone(), value.clone()))?;
+
+        self.wal.push_str(&serialized_command);
+
         self.data.insert(key, value);
+
+        println!("{:?}", self.wal);
         Ok(())
     }
 
@@ -111,4 +121,24 @@ impl KvStore {
     pub fn open(path: &Path) -> Result<KvStore> {
         Ok(KvStore::default())
     }
+}
+
+#[derive(Debug, Serialize)]
+struct WalCommand {
+    action: KvAction,
+    key: String,
+    value: String,
+}
+
+impl WalCommand {
+    fn new(action: KvAction, key: String, value: String) -> Self {
+        Self { action, key, value }
+    }
+}
+
+#[derive(Debug, Serialize)]
+enum KvAction {
+    SET,
+    GET,
+    RM,
 }
