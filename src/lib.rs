@@ -4,7 +4,7 @@
 //! key value setting, retrival and removal.
 
 use failure::Error;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::Path};
 
 /// wrap a generic return type with a dynamic error
@@ -13,7 +13,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// [KvStore] holds key value pairs in memory that have set, get and removal
 /// methods available
 pub struct KvStore {
-    data: HashMap<String, String>,
+    data: HashMap<String, usize>,
     wal: String,
 }
 
@@ -58,12 +58,12 @@ impl KvStore {
     /// # }
     /// ```
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
-        let serialized_command =
+        let mut serialized_command =
             serde_json::to_string(&WalCommand::new(KvAction::SET, key.clone(), value.clone()))?;
 
-        self.wal.push_str(&serialized_command);
+        serialized_command.push('\n');
 
-        self.data.insert(key, value);
+        self.wal.push_str(&serialized_command);
 
         println!("{:?}", self.wal);
         Ok(())
@@ -91,7 +91,20 @@ impl KvStore {
     /// # }
     /// ```
     pub fn get(&mut self, key: String) -> Result<Option<String>> {
-        Ok(self.data.get(&key).cloned())
+        for (index, line) in self.wal.lines().enumerate() {
+            if line.contains(&key) {
+                self.data.insert(key.clone(), index);
+            }
+        }
+
+        self.data
+            .get(&key)
+            .and_then(|log_pointer| self.wal.lines().nth(*log_pointer))
+            .map_or(Ok(None), |line| {
+                serde_json::from_str::<WalCommand>(line)
+                    .map(|command| Some(command.value))
+                    .map_err(|err| err.into())
+            })
     }
 
     /// removes a given key, if the key does not exist
@@ -123,7 +136,7 @@ impl KvStore {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct WalCommand {
     action: KvAction,
     key: String,
@@ -136,7 +149,7 @@ impl WalCommand {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 enum KvAction {
     SET,
     GET,
