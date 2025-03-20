@@ -37,7 +37,7 @@ fn main() -> Result<()> {
     panic!()
 }
 
-fn get_handler<'a>(value: &'a str, kvs: &'a mut KvStore) {
+fn get_handler(value: &str, kvs: &mut KvStore) {
     match kvs.get(value.to_string()) {
         Ok(result) => match result {
             Some(inner_result) => {
@@ -66,7 +66,7 @@ fn set_handler(key: String, value: String, kvs: &mut KvStore) {
     }
 }
 
-fn rm_handler<'a>(value: &'a str, kvs: &'a mut KvStore) {
+fn rm_handler(value: &str, kvs: &mut KvStore) {
     eprintln!("{}", UNIMPLEMENTED);
     exit(1);
 }
