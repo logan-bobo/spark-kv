@@ -2,8 +2,6 @@ use clap::{Parser, Subcommand};
 use kvs::{KvStore, Result};
 use std::process::exit;
 
-const UNIMPLEMENTED: &str = "unimplemented";
-
 #[derive(Parser, Debug)]
 #[command(name = env!("CARGO_PKG_NAME"), version, about, long_about = None)]
 struct Args {
@@ -30,11 +28,11 @@ fn main() -> Result<()> {
             set_handler(key.to_string(), value.to_string(), &mut kvs);
         }
         Commands::Rm { key } => {
-            rm_handler(key, &mut kvs);
+            rm_handler(key.to_string(), &mut kvs);
         }
     }
 
-    panic!()
+    Ok(())
 }
 
 fn get_handler(value: &str, kvs: &mut KvStore) {
@@ -50,7 +48,7 @@ fn get_handler(value: &str, kvs: &mut KvStore) {
             }
         },
         Err(error) => {
-            eprint!("{}", error);
+            println!("{}", error);
             exit(1)
         }
     }
@@ -60,13 +58,18 @@ fn set_handler(key: String, value: String, kvs: &mut KvStore) {
     match kvs.set(key, value) {
         Ok(_) => exit(0),
         Err(error) => {
-            eprint!("{}", error);
+            println!("{}", error);
             exit(1)
         }
     }
 }
 
-fn rm_handler(value: &str, kvs: &mut KvStore) {
-    eprintln!("{}", UNIMPLEMENTED);
-    exit(1);
+fn rm_handler(value: String, kvs: &mut KvStore) {
+    match kvs.remove(value) {
+        Ok(_) => exit(0),
+        Err(error) => {
+            println!("{}", error);
+            exit(1)
+        }
+    }
 }
