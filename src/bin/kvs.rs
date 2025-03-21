@@ -1,41 +1,75 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
+use kvs::{KvStore, Result};
 use std::process::exit;
-
-const UNIMPLEMENTED: &str = "unimplemented";
 
 #[derive(Parser, Debug)]
 #[command(name = env!("CARGO_PKG_NAME"), version, about, long_about = None)]
 struct Args {
-    get: Option<String>,
-    rm: Option<String>,
-    set: Option<Vec<String>>,
+    #[command(subcommand)]
+    command: Commands,
 }
 
-fn main() {
-    let args = Args::parse();
+#[derive(Subcommand, Debug)]
+enum Commands {
+    Get { key: String },
+    Set { key: String, value: String },
+    Rm { key: String },
+}
 
-    if args.get.is_some() {
-        get_handler(&args.get.unwrap());
-    } else if args.set.is_some() {
-        set_handler(&args.set.unwrap());
-    } else if args.rm.is_some() {
-        rm_handler(&args.rm.unwrap());
-    } else {
-        exit(1);
+fn main() -> Result<()> {
+    let args = Args::parse();
+    let mut kvs = KvStore::new();
+
+    match &args.command {
+        Commands::Get { key } => {
+            get_handler(key, &mut kvs);
+        }
+        Commands::Set { key, value } => {
+            set_handler(key.to_string(), value.to_string(), &mut kvs);
+        }
+        Commands::Rm { key } => {
+            rm_handler(key.to_string(), &mut kvs);
+        }
+    }
+
+    Ok(())
+}
+
+fn get_handler(value: &str, kvs: &mut KvStore) {
+    match kvs.get(value.to_string()) {
+        Ok(result) => match result {
+            Some(inner_result) => {
+                println!("{}", inner_result);
+                exit(0)
+            }
+            None => {
+                println!("Key not found");
+                exit(0)
+            }
+        },
+        Err(error) => {
+            println!("{}", error);
+            exit(1)
+        }
     }
 }
 
-fn get_handler(value: &str) -> &str {
-    eprintln!("{}", UNIMPLEMENTED);
-    exit(1);
+fn set_handler(key: String, value: String, kvs: &mut KvStore) {
+    match kvs.set(key, value) {
+        Ok(_) => exit(0),
+        Err(error) => {
+            println!("{}", error);
+            exit(1)
+        }
+    }
 }
 
-fn set_handler(value: &[String]) -> &str {
-    eprintln!("{}", UNIMPLEMENTED);
-    exit(1);
-}
-
-fn rm_handler(value: &str) -> &str {
-    eprintln!("{}", UNIMPLEMENTED);
-    exit(1);
+fn rm_handler(value: String, kvs: &mut KvStore) {
+    match kvs.remove(value) {
+        Ok(_) => exit(0),
+        Err(error) => {
+            println!("{}", error);
+            exit(1)
+        }
+    }
 }
