@@ -5,7 +5,10 @@
 
 use failure::{format_err, Error};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, path::Path};
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::Write;
+use std::path::PathBuf;
 
 /// wrap a generic return type with a dynamic error
 pub type Result<T> = std::result::Result<T, Error>;
@@ -15,12 +18,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct KvStore {
     data: HashMap<String, usize>,
     wal: String,
-}
-
-impl Default for KvStore {
-    fn default() -> Self {
-        Self::new()
-    }
+    wal_p: File,
 }
 
 impl KvStore {
@@ -33,10 +31,11 @@ impl KvStore {
     ///
     /// let kv = KvStore::new();
     /// ```
-    pub fn new() -> Self {
+    pub fn new(file: File) -> Self {
         Self {
             data: HashMap::new(),
             wal: String::new(),
+            wal_p: file,
         }
     }
 
@@ -63,7 +62,7 @@ impl KvStore {
 
         serialized_command.push('\n');
 
-        self.wal.push_str(&serialized_command);
+        self.wal_p.write(&serialized_command.as_bytes())?;
 
         Ok(())
     }
@@ -164,7 +163,7 @@ impl KvStore {
 
                 serialized_command.push('\n');
 
-                self.wal.push_str(&serialized_command);
+                self.wal_p.write(&serialized_command.as_bytes())?;
             }
             // TODO: get rid of failure crate and use anyhow
             None => return Err(format_err!("Key not found")),
@@ -174,8 +173,17 @@ impl KvStore {
     }
 
     /// opens a given path
-    pub fn open(path: &Path) -> Result<KvStore> {
-        Ok(KvStore::default())
+    pub fn open(path: impl Into<PathBuf>) -> Result<KvStore> {
+        let path = path.into();
+
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .read(true)
+            .append(true)
+            .open(&path)?;
+
+        Ok(KvStore::new(file))
     }
 }
 
