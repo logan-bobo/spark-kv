@@ -7,7 +7,7 @@ use failure::{format_err, Error};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Seek, Write};
 use std::path::PathBuf;
 
 /// wrap a generic return type with a dynamic error
@@ -17,8 +17,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// methods available
 pub struct KvStore {
     data: HashMap<String, usize>,
-    wal: String,
-    wal_p: File,
+    wal: File,
 }
 
 impl KvStore {
@@ -34,8 +33,7 @@ impl KvStore {
     pub fn new(file: File) -> Self {
         Self {
             data: HashMap::new(),
-            wal: String::new(),
-            wal_p: file,
+            wal: file,
         }
     }
 
@@ -62,7 +60,8 @@ impl KvStore {
 
         serialized_command.push('\n');
 
-        self.wal_p.write(&serialized_command.as_bytes())?;
+        self.wal.write_all(serialized_command.as_bytes())?;
+        self.wal.flush()?;
 
         Ok(())
     }
@@ -89,7 +88,12 @@ impl KvStore {
     /// # }
     /// ```
     pub fn get(&mut self, key: String) -> Result<Option<String>> {
-        for (index, line) in self.wal.lines().enumerate() {
+        self.wal.seek(std::io::SeekFrom::Start(0))?;
+
+        let mut wal_data = String::new();
+        let _ = self.wal.read_to_string(&mut wal_data)?;
+
+        for (index, line) in wal_data.lines().enumerate() {
             let command = serde_json::from_str::<WalCommand>(line)?;
             match command.action {
                 KvAction::SET => {
@@ -107,7 +111,7 @@ impl KvStore {
 
         self.data
             .get(&key)
-            .and_then(|log_pointer| self.wal.lines().nth(*log_pointer))
+            .and_then(|log_pointer| wal_data.lines().nth(*log_pointer))
             .map_or(Ok(None), |line| {
                 serde_json::from_str::<WalCommand>(line)
                     .map(|command| Some(command.value))
@@ -134,7 +138,13 @@ impl KvStore {
     /// # }
     /// ```
     pub fn remove(&mut self, key: String) -> Result<()> {
-        for (index, line) in self.wal.lines().enumerate() {
+        self.wal.seek(std::io::SeekFrom::Start(0))?;
+
+        let mut wal_data = String::new();
+
+        let _ = self.wal.read_to_string(&mut wal_data)?;
+
+        for (index, line) in wal_data.lines().enumerate() {
             let command = serde_json::from_str::<WalCommand>(line)?;
             match command.action {
                 KvAction::SET => {
@@ -163,7 +173,8 @@ impl KvStore {
 
                 serialized_command.push('\n');
 
-                self.wal_p.write(&serialized_command.as_bytes())?;
+                self.wal.write(&serialized_command.as_bytes())?;
+                self.wal.flush()?;
             }
             // TODO: get rid of failure crate and use anyhow
             None => return Err(format_err!("Key not found")),
@@ -172,9 +183,11 @@ impl KvStore {
         Ok(())
     }
 
-    /// opens a given path
+    /// opens a given path and creates the DB file if it does
+    /// not exist
     pub fn open(path: impl Into<PathBuf>) -> Result<KvStore> {
-        let path = path.into();
+        let mut path: PathBuf = path.into();
+        path.push("kvs.db");
 
         let file = std::fs::OpenOptions::new()
             .create(true)

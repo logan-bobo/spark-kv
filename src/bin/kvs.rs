@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use kvs::{KvStore, Result};
-use std::{path::PathBuf, process::exit};
+use std::process::exit;
 
 #[derive(Parser, Debug)]
 #[command(name = env!("CARGO_PKG_NAME"), version, about, long_about = None)]
@@ -19,7 +19,7 @@ enum Commands {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    let mut kvs = KvStore::open(PathBuf::from("./kvs.db"))?;
+    let mut kvs = KvStore::open(std::env::current_dir()?)?;
 
     match &args.command {
         Commands::Get { key } => {
