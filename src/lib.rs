@@ -5,52 +5,63 @@
 
 use failure::{format_err, Error};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, path::Path};
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{Read, Seek, Write};
+use std::path::PathBuf;
 
 /// wrap a generic return type with a dynamic error
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// [KvStore] holds key value pairs in memory that have set, get and removal
-/// methods available
+/// [KvStore] allows for the persistence of key value pairs to a WAL
+/// with fast retrival via an in memory index.
 pub struct KvStore {
     data: HashMap<String, usize>,
-    wal: String,
-}
-
-impl Default for KvStore {
-    fn default() -> Self {
-        Self::new()
-    }
+    wal: File,
 }
 
 impl KvStore {
-    /// provides a new instance of a [KvStore]
+    /// provides a new instance of a [KvStore], this requires
+    /// a file to ready and write to that is the write ahead log
+    /// known as a WAL
     ///
     /// # Examples
     ///
     /// ```rust
     /// use kvs::KvStore;
+    /// use tempfile::tempfile;
+    /// # use kvs::Result;
+    /// # fn main() -> Result<()> {
     ///
-    /// let kv = KvStore::new();
+    /// let file = tempfile()?;
+    ///
+    /// let kv = KvStore::new(file);
+    /// # Ok(())
+    /// # }
     /// ```
-    pub fn new() -> Self {
+    pub fn new(file: File) -> Self {
         Self {
             data: HashMap::new(),
-            wal: String::new(),
+            wal: file,
         }
     }
 
-    /// allows a caller to set a new unique key
+    /// set a new unique key
     /// if the key already exists the value is overwritten
     ///
     /// # Examples
     ///
     /// ```rust
     /// use kvs::KvStore;
+    /// use tempfile::tempfile;
     /// # use kvs::Result;
     /// # fn main() -> Result<()> {
-    /// let mut kv = KvStore::new();
+    ///
+    /// let file = tempfile()?;
+    /// let mut kv = KvStore::new(file);
+    ///
     /// kv.set("Key1".to_string(), "Val1".to_string());
+    ///
     /// let value1 = kv.get("Key1".to_string())?;
     ///
     /// assert_eq!(value1, Some("Val1".to_string()));
@@ -63,12 +74,13 @@ impl KvStore {
 
         serialized_command.push('\n');
 
-        self.wal.push_str(&serialized_command);
+        self.wal.write_all(serialized_command.as_bytes())?;
+        self.wal.flush()?;
 
         Ok(())
     }
 
-    /// allows a caller to retrieve a value for a given key
+    /// retrieve a value for a given key
     /// if the key exists the value is `Some(value)` or
     /// if the key does not exists `None` is returned
     ///
@@ -76,9 +88,13 @@ impl KvStore {
     ///
     /// ```rust
     /// use kvs::KvStore;
+    /// use tempfile::tempfile;
     /// # use kvs::Result;
     /// # fn main() -> Result<()> {
-    /// let mut kv = KvStore::new();
+    ///
+    /// let file = tempfile()?;
+    /// let mut kv = KvStore::new(file);
+    ///
     /// kv.set("Key1".to_string(), "Val1".to_string())?;
     ///
     /// let value1 = kv.get("Key1".to_string())?;
@@ -90,7 +106,12 @@ impl KvStore {
     /// # }
     /// ```
     pub fn get(&mut self, key: String) -> Result<Option<String>> {
-        for (index, line) in self.wal.lines().enumerate() {
+        self.wal.seek(std::io::SeekFrom::Start(0))?;
+
+        let mut wal_data = String::new();
+        let _ = self.wal.read_to_string(&mut wal_data)?;
+
+        for (index, line) in wal_data.lines().enumerate() {
             let command = serde_json::from_str::<WalCommand>(line)?;
             match command.action {
                 KvAction::SET => {
@@ -108,7 +129,7 @@ impl KvStore {
 
         self.data
             .get(&key)
-            .and_then(|log_pointer| self.wal.lines().nth(*log_pointer))
+            .and_then(|log_pointer| wal_data.lines().nth(*log_pointer))
             .map_or(Ok(None), |line| {
                 serde_json::from_str::<WalCommand>(line)
                     .map(|command| Some(command.value))
@@ -123,11 +144,16 @@ impl KvStore {
     ///
     /// ```rust
     /// use kvs::KvStore;
+    /// use tempfile::tempfile;
     /// # use kvs::Result;
     /// # fn main() -> Result<()> {
-    /// let mut kv = KvStore::new();
+    ///
+    /// let file = tempfile()?;
+    /// let mut kv = KvStore::new(file);
+    ///
     /// kv.set("Key1".to_string(), "Val1".to_string())?;
     /// kv.remove("Key1".to_string());
+    ///
     /// let value1 = kv.get("Key1".to_string())?;
     ///
     /// assert_eq!(value1, None);
@@ -135,7 +161,13 @@ impl KvStore {
     /// # }
     /// ```
     pub fn remove(&mut self, key: String) -> Result<()> {
-        for (index, line) in self.wal.lines().enumerate() {
+        self.wal.seek(std::io::SeekFrom::Start(0))?;
+
+        let mut wal_data = String::new();
+
+        let _ = self.wal.read_to_string(&mut wal_data)?;
+
+        for (index, line) in wal_data.lines().enumerate() {
             let command = serde_json::from_str::<WalCommand>(line)?;
             match command.action {
                 KvAction::SET => {
@@ -164,7 +196,8 @@ impl KvStore {
 
                 serialized_command.push('\n');
 
-                self.wal.push_str(&serialized_command);
+                self.wal.write(&serialized_command.as_bytes())?;
+                self.wal.flush()?;
             }
             // TODO: get rid of failure crate and use anyhow
             None => return Err(format_err!("Key not found")),
@@ -173,9 +206,20 @@ impl KvStore {
         Ok(())
     }
 
-    /// opens a given path
-    pub fn open(path: &Path) -> Result<KvStore> {
-        Ok(KvStore::default())
+    /// opens a given path and creates the DB file if it does
+    /// not exist this will be the persistent storage of the WAL
+    pub fn open(path: impl Into<PathBuf>) -> Result<KvStore> {
+        let mut path: PathBuf = path.into();
+        path.push("kvs.db");
+
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .read(true)
+            .append(true)
+            .open(&path)?;
+
+        Ok(KvStore::new(file))
     }
 }
 

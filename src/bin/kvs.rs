@@ -18,7 +18,8 @@ enum Commands {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let mut kvs = KvStore::new();
+
+    let mut kvs = KvStore::open(std::env::current_dir()?)?;
 
     match &args.command {
         Commands::Get { key } => {
