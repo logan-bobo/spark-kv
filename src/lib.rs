@@ -13,22 +13,31 @@ use std::path::PathBuf;
 /// wrap a generic return type with a dynamic error
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// [KvStore] holds key value pairs in memory that have set, get and removal
-/// methods available
+/// [KvStore] allows for the persistence of key value pairs to a WAL
+/// with fast retrival via an in memory index.
 pub struct KvStore {
     data: HashMap<String, usize>,
     wal: File,
 }
 
 impl KvStore {
-    /// provides a new instance of a [KvStore]
+    /// provides a new instance of a [KvStore], this requires
+    /// a file to ready and write to that is the write ahead log
+    /// known as a WAL
     ///
     /// # Examples
     ///
     /// ```rust
     /// use kvs::KvStore;
+    /// use tempfile::tempfile;
+    /// # use kvs::Result;
+    /// # fn main() -> Result<()> {
     ///
-    /// let kv = KvStore::new();
+    /// let file = tempfile()?;
+    ///
+    /// let kv = KvStore::new(file);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn new(file: File) -> Self {
         Self {
@@ -37,17 +46,22 @@ impl KvStore {
         }
     }
 
-    /// allows a caller to set a new unique key
+    /// set a new unique key
     /// if the key already exists the value is overwritten
     ///
     /// # Examples
     ///
     /// ```rust
     /// use kvs::KvStore;
+    /// use tempfile::tempfile;
     /// # use kvs::Result;
     /// # fn main() -> Result<()> {
-    /// let mut kv = KvStore::new();
+    ///
+    /// let file = tempfile()?;
+    /// let mut kv = KvStore::new(file);
+    ///
     /// kv.set("Key1".to_string(), "Val1".to_string());
+    ///
     /// let value1 = kv.get("Key1".to_string())?;
     ///
     /// assert_eq!(value1, Some("Val1".to_string()));
@@ -66,7 +80,7 @@ impl KvStore {
         Ok(())
     }
 
-    /// allows a caller to retrieve a value for a given key
+    /// retrieve a value for a given key
     /// if the key exists the value is `Some(value)` or
     /// if the key does not exists `None` is returned
     ///
@@ -74,9 +88,13 @@ impl KvStore {
     ///
     /// ```rust
     /// use kvs::KvStore;
+    /// use tempfile::tempfile;
     /// # use kvs::Result;
     /// # fn main() -> Result<()> {
-    /// let mut kv = KvStore::new();
+    ///
+    /// let file = tempfile()?;
+    /// let mut kv = KvStore::new(file);
+    ///
     /// kv.set("Key1".to_string(), "Val1".to_string())?;
     ///
     /// let value1 = kv.get("Key1".to_string())?;
@@ -126,11 +144,16 @@ impl KvStore {
     ///
     /// ```rust
     /// use kvs::KvStore;
+    /// use tempfile::tempfile;
     /// # use kvs::Result;
     /// # fn main() -> Result<()> {
-    /// let mut kv = KvStore::new();
+    ///
+    /// let file = tempfile()?;
+    /// let mut kv = KvStore::new(file);
+    ///
     /// kv.set("Key1".to_string(), "Val1".to_string())?;
     /// kv.remove("Key1".to_string());
+    ///
     /// let value1 = kv.get("Key1".to_string())?;
     ///
     /// assert_eq!(value1, None);
@@ -184,7 +207,7 @@ impl KvStore {
     }
 
     /// opens a given path and creates the DB file if it does
-    /// not exist
+    /// not exist this will be the persistent storage of the WAL
     pub fn open(path: impl Into<PathBuf>) -> Result<KvStore> {
         let mut path: PathBuf = path.into();
         path.push("kvs.db");
