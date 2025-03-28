@@ -77,6 +77,18 @@ impl KvStore {
         self.wal.write_all(serialized_command.as_bytes())?;
         self.wal.flush()?;
 
+        // this is a signal that I need to find a better way to track where
+        // data is being written and read. Reading the whole file and itterating
+        // using a line as the offset is not a good idea at all
+        self.wal.seek(std::io::SeekFrom::Start(0))?;
+        let mut wal_data = String::new();
+        let _ = self.wal.read_to_string(&mut wal_data);
+
+        let wal_commands: Vec<&str> = wal_data.lines().collect();
+
+        // the cursor tracking the file location trats the first line as 0
+        self.data.insert(key, wal_commands.len() - 1);
+
         Ok(())
     }
 
@@ -108,33 +120,21 @@ impl KvStore {
     pub fn get(&mut self, key: String) -> Result<Option<String>> {
         self.wal.seek(std::io::SeekFrom::Start(0))?;
 
-        let mut wal_data = String::new();
-        let _ = self.wal.read_to_string(&mut wal_data)?;
+        match self.data.get(&key) {
+            Some(log_pointer) => {
+                let mut wal_data = String::new();
 
-        for (index, line) in wal_data.lines().enumerate() {
-            let command = serde_json::from_str::<WalCommand>(line)?;
-            match command.action {
-                KvAction::SET => {
-                    self.data.insert(command.key, index);
+                self.wal.read_to_string(&mut wal_data)?;
+
+                if let Some(line) = wal_data.lines().nth(*log_pointer) {
+                    let command = serde_json::from_str::<WalCommand>(line)?;
+                    Ok(Some(command.value))
+                } else {
+                    Ok(None)
                 }
-                KvAction::RM => {
-                    self.data.remove(&command.key);
-                }
-                // there are no GET actions recorded in the WAL
-                // this match is to ensure we are doing exaustive
-                // matches on enums
-                KvAction::GET => continue,
             }
+            None => Ok(None),
         }
-
-        self.data
-            .get(&key)
-            .and_then(|log_pointer| wal_data.lines().nth(*log_pointer))
-            .map_or(Ok(None), |line| {
-                serde_json::from_str::<WalCommand>(line)
-                    .map(|command| Some(command.value))
-                    .map_err(|err| err.into())
-            })
     }
 
     /// removes a given key, if the key does not exist
@@ -161,28 +161,6 @@ impl KvStore {
     /// # }
     /// ```
     pub fn remove(&mut self, key: String) -> Result<()> {
-        self.wal.seek(std::io::SeekFrom::Start(0))?;
-
-        let mut wal_data = String::new();
-
-        let _ = self.wal.read_to_string(&mut wal_data)?;
-
-        for (index, line) in wal_data.lines().enumerate() {
-            let command = serde_json::from_str::<WalCommand>(line)?;
-            match command.action {
-                KvAction::SET => {
-                    self.data.insert(command.key, index);
-                }
-                KvAction::RM => {
-                    self.data.remove(&command.key);
-                }
-                // there are no GET actions recorded in the WAL
-                // this match is to ensure we are doing exaustive
-                // matches on enums
-                KvAction::GET => continue,
-            }
-        }
-
         match self.data.get(&key) {
             Some(_) => {
                 let mut serialized_command = serde_json::to_string(&WalCommand::new(
@@ -198,6 +176,7 @@ impl KvStore {
 
                 self.wal.write(&serialized_command.as_bytes())?;
                 self.wal.flush()?;
+                self.data.remove(&key);
             }
             // TODO: get rid of failure crate and use anyhow
             None => return Err(format_err!("Key not found")),
@@ -208,6 +187,7 @@ impl KvStore {
 
     /// opens a given path and creates the DB file if it does
     /// not exist this will be the persistent storage of the WAL
+    /// replaying that wall to build an in memory index
     pub fn open(path: impl Into<PathBuf>) -> Result<KvStore> {
         let mut path: PathBuf = path.into();
         path.push("kvs.db");
@@ -219,7 +199,26 @@ impl KvStore {
             .append(true)
             .open(&path)?;
 
-        Ok(KvStore::new(file))
+        let mut kv_store = KvStore::new(file);
+
+        let mut wal_data = String::new();
+
+        let _ = kv_store.wal.read_to_string(&mut wal_data)?;
+
+        for (index, line) in wal_data.lines().enumerate() {
+            let command = serde_json::from_str::<WalCommand>(line)?;
+            match command.action {
+                KvAction::SET => {
+                    kv_store.data.insert(command.key, index);
+                }
+                KvAction::RM => {
+                    kv_store.data.remove(&command.key);
+                }
+                KvAction::GET => continue,
+            }
+        }
+
+        Ok(kv_store)
     }
 }
 
