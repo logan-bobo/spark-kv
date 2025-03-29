@@ -1,13 +1,15 @@
 #![deny(missing_docs)]
 
-//! a simple implementation of a key value store in memory that supports
+//! a simple implementation of a key value store that supports
 //! key value setting, retrival and removal.
 
 use failure::{format_err, Error};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{Read, Seek, Write};
+use std::io::{BufRead, SeekFrom};
+use std::io::{BufReader, Seek, Write};
+use std::ops::Add;
 use std::path::PathBuf;
 
 /// wrap a generic return type with a dynamic error
@@ -15,9 +17,10 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// [KvStore] allows for the persistence of key value pairs to a WAL
 /// with fast retrival via an in memory index.
+#[derive(Debug)]
 pub struct KvStore {
-    data: HashMap<String, usize>,
-    wal: File,
+    data: HashMap<String, u64>,
+    wal: Wal,
 }
 
 impl KvStore {
@@ -42,7 +45,7 @@ impl KvStore {
     pub fn new(file: File) -> Self {
         Self {
             data: HashMap::new(),
-            wal: file,
+            wal: Wal::new(file, 0),
         }
     }
 
@@ -69,25 +72,24 @@ impl KvStore {
     /// # }
     /// ```
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
-        let mut serialized_command =
-            serde_json::to_string(&WalCommand::new(KvAction::SET, key.clone(), value.clone()))?;
+        let mut serialized_command = serde_json::to_string(&WalCommand::new(
+            KvAction::Set,
+            key.clone(),
+            Some(value.clone()),
+        ))?;
 
         serialized_command.push('\n');
 
-        self.wal.write_all(serialized_command.as_bytes())?;
-        self.wal.flush()?;
+        self.wal.file.write_all(serialized_command.as_bytes())?;
+        self.wal.file.flush()?;
 
-        // this is a signal that I need to find a better way to track where
-        // data is being written and read. Reading the whole file and itterating
-        // using a line as the offset is not a good idea at all
-        self.wal.seek(std::io::SeekFrom::Start(0))?;
-        let mut wal_data = String::new();
-        let _ = self.wal.read_to_string(&mut wal_data);
+        // the write marker is the first byte of the command
+        self.data.insert(key, self.wal.write_marker);
 
-        let wal_commands: Vec<&str> = wal_data.lines().collect();
-
-        // the cursor tracking the file location trats the first line as 0
-        self.data.insert(key, wal_commands.len() - 1);
+        self.wal.write_marker = self
+            .wal
+            .write_marker
+            .add(serialized_command.as_bytes().len() as u64);
 
         Ok(())
     }
@@ -118,20 +120,18 @@ impl KvStore {
     /// # }
     /// ```
     pub fn get(&mut self, key: String) -> Result<Option<String>> {
-        self.wal.seek(std::io::SeekFrom::Start(0))?;
-
         match self.data.get(&key) {
             Some(log_pointer) => {
-                let mut wal_data = String::new();
+                self.wal.file.seek(SeekFrom::Start(*log_pointer))?;
 
-                self.wal.read_to_string(&mut wal_data)?;
+                let mut reader = BufReader::new(&mut self.wal.file);
 
-                if let Some(line) = wal_data.lines().nth(*log_pointer) {
-                    let command = serde_json::from_str::<WalCommand>(line)?;
-                    Ok(Some(command.value))
-                } else {
-                    Ok(None)
-                }
+                let mut line = String::new();
+                let _ = reader.read_line(&mut line);
+
+                let wal_command = serde_json::from_str::<WalCommand>(&line)?;
+
+                Ok(wal_command.value)
             }
             None => Ok(None),
         }
@@ -163,22 +163,15 @@ impl KvStore {
     pub fn remove(&mut self, key: String) -> Result<()> {
         match self.data.get(&key) {
             Some(_) => {
-                let mut serialized_command = serde_json::to_string(&WalCommand::new(
-                    KvAction::RM,
-                    key.clone(),
-                    "".to_string(), // TODO: this is ugly and does not fully represent a RM action
-                                    // lets move to WallCommand being an Enum that contains
-                                    // a set of structs that model the command better or
-                                    // make value Option<String> ????
-                ))?;
+                let mut serialized_command =
+                    serde_json::to_string(&WalCommand::new(KvAction::Rm, key.clone(), None))?;
 
                 serialized_command.push('\n');
 
-                self.wal.write(&serialized_command.as_bytes())?;
-                self.wal.flush()?;
+                self.wal.file.write_all(serialized_command.as_bytes())?;
+                self.wal.file.flush()?;
                 self.data.remove(&key);
             }
-            // TODO: get rid of failure crate and use anyhow
             None => return Err(format_err!("Key not found")),
         }
 
@@ -194,29 +187,38 @@ impl KvStore {
 
         let file = std::fs::OpenOptions::new()
             .create(true)
-            .write(true)
             .read(true)
             .append(true)
             .open(&path)?;
 
         let mut kv_store = KvStore::new(file);
 
-        let mut wal_data = String::new();
+        let mut reader = BufReader::new(&mut kv_store.wal.file);
+        let mut line = String::new();
 
-        let _ = kv_store.wal.read_to_string(&mut wal_data)?;
-
-        for (index, line) in wal_data.lines().enumerate() {
-            let command = serde_json::from_str::<WalCommand>(line)?;
-            match command.action {
-                KvAction::SET => {
-                    kv_store.data.insert(command.key, index);
-                }
-                KvAction::RM => {
-                    kv_store.data.remove(&command.key);
-                }
-                KvAction::GET => continue,
+        while let Ok(bytes) = reader.read_line(&mut line) {
+            if bytes == 0 {
+                break;
             }
+
+            let position = reader.stream_position()? - bytes as u64;
+
+            let wal_comnmand = serde_json::from_str::<WalCommand>(&line)?;
+
+            match wal_comnmand.action {
+                KvAction::Set => {
+                    kv_store.data.insert(wal_comnmand.key, position);
+                }
+                KvAction::Rm => {
+                    kv_store.data.remove(&wal_comnmand.key);
+                }
+                KvAction::Get => {}
+            }
+
+            line.clear();
         }
+
+        kv_store.wal.write_marker = reader.stream_position()?;
 
         Ok(kv_store)
     }
@@ -226,18 +228,31 @@ impl KvStore {
 struct WalCommand {
     action: KvAction,
     key: String,
-    value: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    value: Option<String>,
 }
 
 impl WalCommand {
-    fn new(action: KvAction, key: String, value: String) -> Self {
+    fn new(action: KvAction, key: String, value: Option<String>) -> Self {
         Self { action, key, value }
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 enum KvAction {
-    SET,
-    GET,
-    RM,
+    Set,
+    Get,
+    Rm,
+}
+
+#[derive(Debug)]
+struct Wal {
+    file: File,
+    write_marker: u64,
+}
+
+impl Wal {
+    fn new(file: File, write_marker: u64) -> Self {
+        Self { file, write_marker }
+    }
 }
