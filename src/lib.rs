@@ -1,6 +1,6 @@
 #![deny(missing_docs)]
 
-//! a simple implementation of a key value store in memory that supports
+//! a simple implementation of a key value store that supports
 //! key value setting, retrival and removal.
 
 use failure::{format_err, Error};
@@ -69,8 +69,11 @@ impl KvStore {
     /// # }
     /// ```
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
-        let mut serialized_command =
-            serde_json::to_string(&WalCommand::new(KvAction::SET, key.clone(), value.clone()))?;
+        let mut serialized_command = serde_json::to_string(&WalCommand::new(
+            KvAction::Set,
+            key.clone(),
+            Some(value.clone()),
+        ))?;
 
         serialized_command.push('\n');
 
@@ -128,7 +131,14 @@ impl KvStore {
 
                 if let Some(line) = wal_data.lines().nth(*log_pointer) {
                     let command = serde_json::from_str::<WalCommand>(line)?;
-                    Ok(Some(command.value))
+                    Ok(Some(match command.value {
+                        Some(value) => value,
+                        None => {
+                            return Err(format_err!(
+                                "index error: index points to a key with no value"
+                            ));
+                        }
+                    }))
                 } else {
                     Ok(None)
                 }
@@ -163,18 +173,12 @@ impl KvStore {
     pub fn remove(&mut self, key: String) -> Result<()> {
         match self.data.get(&key) {
             Some(_) => {
-                let mut serialized_command = serde_json::to_string(&WalCommand::new(
-                    KvAction::RM,
-                    key.clone(),
-                    "".to_string(), // TODO: this is ugly and does not fully represent a RM action
-                                    // lets move to WallCommand being an Enum that contains
-                                    // a set of structs that model the command better or
-                                    // make value Option<String> ????
-                ))?;
+                let mut serialized_command =
+                    serde_json::to_string(&WalCommand::new(KvAction::Rm, key.clone(), None))?;
 
                 serialized_command.push('\n');
 
-                self.wal.write(&serialized_command.as_bytes())?;
+                self.wal.write_all(serialized_command.as_bytes())?;
                 self.wal.flush()?;
                 self.data.remove(&key);
             }
@@ -194,7 +198,6 @@ impl KvStore {
 
         let file = std::fs::OpenOptions::new()
             .create(true)
-            .write(true)
             .read(true)
             .append(true)
             .open(&path)?;
@@ -208,13 +211,13 @@ impl KvStore {
         for (index, line) in wal_data.lines().enumerate() {
             let command = serde_json::from_str::<WalCommand>(line)?;
             match command.action {
-                KvAction::SET => {
+                KvAction::Set => {
                     kv_store.data.insert(command.key, index);
                 }
-                KvAction::RM => {
+                KvAction::Rm => {
                     kv_store.data.remove(&command.key);
                 }
-                KvAction::GET => continue,
+                KvAction::Get => continue,
             }
         }
 
@@ -226,18 +229,19 @@ impl KvStore {
 struct WalCommand {
     action: KvAction,
     key: String,
-    value: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    value: Option<String>,
 }
 
 impl WalCommand {
-    fn new(action: KvAction, key: String, value: String) -> Self {
+    fn new(action: KvAction, key: String, value: Option<String>) -> Self {
         Self { action, key, value }
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 enum KvAction {
-    SET,
-    GET,
-    RM,
+    Set,
+    Get,
+    Rm,
 }
