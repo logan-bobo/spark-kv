@@ -222,6 +222,19 @@ impl KvStore {
 
         Ok(kv_store)
     }
+
+    /// compacts the current WAL by removing dead entries
+    pub fn compact(&self) {
+        // The base idea is we on boot rebuild the in memory index from the current WAL,
+        // then that will give use the most up to date represendation of the state. Then write
+        // the in memory index back to disk all of the keys should be deduplicated.
+        //
+        // The disadvantage of this is the WAL is compacted on startup, meaning it impacts startup
+        // time and you need to reboot the service to reclaim disk space but as this is single
+        // threaded at the moment it should be fine, when the service is multi threaded we
+        // can spawn a compaction worker
+        //
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
