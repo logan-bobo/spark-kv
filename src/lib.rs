@@ -193,7 +193,21 @@ impl KvStore {
 
         let mut kv_store = KvStore::new(file);
 
-        let mut reader = BufReader::new(&mut kv_store.wal.file);
+        kv_store.build_index()?;
+
+        Ok(kv_store)
+    }
+
+    /// compacts the current WAL by removing dead entries
+    /// pub fn compact(&mut self) -> Result<()> {
+    ///    
+    /// }
+
+    /// rebuilds the in memory index using the current instance of a kv store
+    /// by buffering each line of the WAL buidil all records have been processed
+    /// maintaining the read cursor
+    fn build_index(&mut self) -> Result<()> {
+        let mut reader = BufReader::new(&mut self.wal.file);
         let mut line = String::new();
 
         while let Ok(bytes) = reader.read_line(&mut line) {
@@ -207,10 +221,10 @@ impl KvStore {
 
             match wal_comnmand.action {
                 KvAction::Set => {
-                    kv_store.data.insert(wal_comnmand.key, position);
+                    self.data.insert(wal_comnmand.key, position);
                 }
                 KvAction::Rm => {
-                    kv_store.data.remove(&wal_comnmand.key);
+                    self.data.remove(&wal_comnmand.key);
                 }
                 KvAction::Get => {}
             }
@@ -218,22 +232,9 @@ impl KvStore {
             line.clear();
         }
 
-        kv_store.wal.write_marker = reader.stream_position()?;
+        self.wal.write_marker = reader.stream_position()?;
 
-        Ok(kv_store)
-    }
-
-    /// compacts the current WAL by removing dead entries
-    pub fn compact(&self) {
-        // The base idea is we on boot rebuild the in memory index from the current WAL,
-        // then that will give use the most up to date represendation of the state. Then write
-        // the in memory index back to disk all of the keys should be deduplicated.
-        //
-        // The disadvantage of this is the WAL is compacted on startup, meaning it impacts startup
-        // time and you need to reboot the service to reclaim disk space but as this is single
-        // threaded at the moment it should be fine, when the service is multi threaded we
-        // can spawn a compaction worker
-        //
+        Ok(())
     }
 }
 
