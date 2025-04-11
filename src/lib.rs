@@ -6,7 +6,7 @@
 use failure::{format_err, Error};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{BufRead, SeekFrom};
 use std::io::{BufReader, Seek, Write};
 use std::ops::Add;
@@ -42,10 +42,10 @@ impl KvStore {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn new(file: File) -> Self {
+    pub fn new(file: File, backup_path: PathBuf, data_path: PathBuf) -> Self {
         Self {
             data: HashMap::new(),
-            wal: Wal::new(file, 0),
+            wal: Wal::new(file, backup_path, data_path, 0),
         }
     }
 
@@ -72,6 +72,10 @@ impl KvStore {
     /// # }
     /// ```
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
+        dbg!(&self.data);
+        dbg!(&self.wal.data_path);
+        self.compact()?;
+
         let mut serialized_command = serde_json::to_string(&WalCommand::new(
             KvAction::Set,
             key.clone(),
@@ -182,26 +186,92 @@ impl KvStore {
     /// not exist this will be the persistent storage of the WAL
     /// replaying that wall to build an in memory index
     pub fn open(path: impl Into<PathBuf>) -> Result<KvStore> {
-        let mut path: PathBuf = path.into();
-        path.push("kvs.db");
+        let mut data_path: PathBuf = path.into();
+        let mut backup_path = data_path.clone();
+
+        data_path.push("kvs.db");
+        backup_path.push("kvs.db.bak");
 
         let file = std::fs::OpenOptions::new()
             .create(true)
             .read(true)
             .append(true)
-            .open(&path)?;
+            .open(&data_path)?;
 
-        let mut kv_store = KvStore::new(file);
+        let mut kv_store = KvStore::new(file, backup_path, data_path);
 
         kv_store.build_index()?;
 
         Ok(kv_store)
     }
 
-    /// compacts the current WAL by removing dead entries
-    /// pub fn compact(&mut self) -> Result<()> {
-    ///    
-    /// }
+    /// compacts the current WAL by removing dead records
+    pub fn compact(&mut self) -> Result<()> {
+        // wipe the current file to rebuild it from the in memory index
+        // note this does not sacrifice durability as we have already
+        // created a backup of the current WAL before we compact so if compaction
+        // fails just rename the backup file to the main file. This is not the final
+        // solution just maintains durability whilst alowing me to test compaction
+
+        fs::File::create(&self.wal.backup_path)?;
+
+        // before any compaction runs we need to ensure data durability
+        // to do this we copy the current WAL this ensures if compaction
+        // fails or corrupts the file, we can restore the database to a state
+        // before the current compaction cycle
+        // TODO: implement a recovery path where if kvs.db.bak exists recover
+        // the wal from that file after compaction the file should not exist
+        fs::copy(&self.wal.data_path, &self.wal.backup_path)?;
+
+        self.wal.file.seek(SeekFrom::Start(0))?;
+
+        let mut tmp_index: HashMap<String, String> = HashMap::new();
+        let mut reader = BufReader::new(&mut self.wal.file);
+        let mut line = String::new();
+
+        while let Ok(bytes) = reader.read_line(&mut line) {
+            if bytes == 0 {
+                break;
+            }
+
+            let wal_comnmand = serde_json::from_str::<WalCommand>(&line)?;
+
+            dbg!(&wal_comnmand);
+
+            match wal_comnmand.action {
+                KvAction::Set => {
+                    // infallible unwrap no key can exist in the wal with no value
+                    tmp_index.insert(wal_comnmand.key, wal_comnmand.value.unwrap());
+                }
+                KvAction::Rm => {
+                    tmp_index.remove(&wal_comnmand.key);
+                }
+                KvAction::Get => {}
+            }
+
+            line.clear();
+        }
+
+        self.wal.file.set_len(0)?;
+
+        dbg!(&tmp_index);
+
+        for (key, value) in tmp_index {
+            let mut wal_command =
+                serde_json::to_string(&WalCommand::new(KvAction::Set, key, Some(value)))?;
+
+            wal_command.push('\n');
+
+            self.wal.file.write_all(wal_command.as_bytes())?;
+            self.wal.file.flush()?;
+        }
+
+        self.wal.file.seek(SeekFrom::Start(0))?;
+
+        fs::remove_file(&self.wal.backup_path)?;
+
+        Ok(())
+    }
 
     /// rebuilds the in memory index using the current instance of a kv store
     /// by buffering each line of the WAL buidil all records have been processed
@@ -262,11 +332,18 @@ enum KvAction {
 #[derive(Debug)]
 struct Wal {
     file: File,
+    backup_path: PathBuf,
+    data_path: PathBuf,
     write_marker: u64,
 }
 
 impl Wal {
-    fn new(file: File, write_marker: u64) -> Self {
-        Self { file, write_marker }
+    fn new(file: File, backup_path: PathBuf, data_path: PathBuf, write_marker: u64) -> Self {
+        Self {
+            file,
+            backup_path,
+            data_path,
+            write_marker,
+        }
     }
 }
