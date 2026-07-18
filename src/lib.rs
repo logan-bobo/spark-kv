@@ -19,7 +19,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// with fast retrival via an in memory index.
 #[derive(Debug)]
 pub struct KvStore {
-    data: HashMap<String, u64>,
+    index: HashMap<String, u64>,
     wal: Wal,
 }
 
@@ -44,7 +44,7 @@ impl KvStore {
     /// ```
     pub fn new(file: File) -> Self {
         Self {
-            data: HashMap::new(),
+            index: HashMap::new(),
             wal: Wal::new(file, 0),
         }
     }
@@ -84,12 +84,9 @@ impl KvStore {
         self.wal.file.flush()?;
 
         // the write marker is the first byte of the command
-        self.data.insert(key, self.wal.write_marker);
+        self.index.insert(key, self.wal.write_marker);
 
-        self.wal.write_marker = self
-            .wal
-            .write_marker
-            .add(serialized_command.as_bytes().len() as u64);
+        self.wal.write_marker = self.wal.write_marker.add(serialized_command.len() as u64);
 
         Ok(())
     }
@@ -120,7 +117,7 @@ impl KvStore {
     /// # }
     /// ```
     pub fn get(&mut self, key: String) -> Result<Option<String>> {
-        match self.data.get(&key) {
+        match self.index.get(&key) {
             Some(log_pointer) => {
                 self.wal.file.seek(SeekFrom::Start(*log_pointer))?;
 
@@ -161,7 +158,7 @@ impl KvStore {
     /// # }
     /// ```
     pub fn remove(&mut self, key: String) -> Result<()> {
-        match self.data.get(&key) {
+        match self.index.get(&key) {
             Some(_) => {
                 let mut serialized_command =
                     serde_json::to_string(&WalCommand::new(KvAction::Rm, key.clone(), None))?;
@@ -170,7 +167,7 @@ impl KvStore {
 
                 self.wal.file.write_all(serialized_command.as_bytes())?;
                 self.wal.file.flush()?;
-                self.data.remove(&key);
+                self.index.remove(&key);
             }
             None => return Err(format_err!("Key not found")),
         }
@@ -207,10 +204,10 @@ impl KvStore {
 
             match wal_comnmand.action {
                 KvAction::Set => {
-                    kv_store.data.insert(wal_comnmand.key, position);
+                    kv_store.index.insert(wal_comnmand.key, position);
                 }
                 KvAction::Rm => {
-                    kv_store.data.remove(&wal_comnmand.key);
+                    kv_store.index.remove(&wal_comnmand.key);
                 }
                 KvAction::Get => {}
             }
