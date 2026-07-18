@@ -77,7 +77,7 @@ impl KvStore {
 
         // Update the index so the key points to the first
         // byte of the command
-        self.index.insert(key, self.wal.write_marker);
+        self.index.insert(key, self.wal.get_write_marker());
 
         // move the write marker to the last byte of the command
         // so we can begin our next wal event
@@ -201,7 +201,11 @@ impl KvStore {
             line.clear();
         }
 
-        kv_store.wal.write_marker = reader.stream_position()?;
+        // cant pass reader into the below as reader is already a
+        // mutable reference
+        let next_write_location = reader.stream_position()?;
+
+        kv_store.wal.set_write_marker_possition(next_write_location);
 
         Ok(kv_store)
     }

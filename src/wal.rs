@@ -29,7 +29,7 @@ pub enum KvAction {
 #[derive(Debug)]
 pub struct Wal {
     pub file: File,
-    pub write_marker: u64,
+    write_marker: u64,
 }
 
 impl Wal {
@@ -45,6 +45,14 @@ impl Wal {
         self.file.flush()?;
 
         Ok(serialized_command.len() as u64)
+    }
+
+    pub fn get_write_marker(&self) -> u64 {
+        self.write_marker
+    }
+
+    pub fn set_write_marker_possition(&mut self, byte: u64) {
+        self.write_marker = byte;
     }
 
     pub fn progress_write_marker(&mut self, bytes: u64) {
