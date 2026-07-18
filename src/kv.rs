@@ -3,9 +3,8 @@
 use failure::{format_err, Error};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufRead, SeekFrom};
-use std::io::{BufReader, Seek, Write};
-use std::ops::Add;
+use std::io::BufRead;
+use std::io::{BufReader, Seek};
 use std::path::PathBuf;
 
 use crate::wal::{KvAction, Wal, WalCommand};
@@ -70,21 +69,19 @@ impl KvStore {
     /// # }
     /// ```
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
-        let mut serialized_command = serde_json::to_string(&WalCommand::new(
+        let bytes_written = self.wal.write(WalCommand::new(
             KvAction::Set,
             key.clone(),
             Some(value.clone()),
         ))?;
 
-        serialized_command.push('\n');
-
-        self.wal.file.write_all(serialized_command.as_bytes())?;
-        self.wal.file.flush()?;
-
-        // the write marker is the first byte of the command
+        // Update the index so the key points to the first
+        // byte of the command
         self.index.insert(key, self.wal.write_marker);
 
-        self.wal.write_marker = self.wal.write_marker.add(serialized_command.len() as u64);
+        // move the write marker to the last byte of the command
+        // so we can begin our next wal event
+        self.wal.progress_write_marker(bytes_written);
 
         Ok(())
     }
@@ -117,16 +114,8 @@ impl KvStore {
     pub fn get(&mut self, key: String) -> Result<Option<String>> {
         match self.index.get(&key) {
             Some(log_pointer) => {
-                self.wal.file.seek(SeekFrom::Start(*log_pointer))?;
-
-                let mut reader = BufReader::new(&mut self.wal.file);
-
-                let mut line = String::new();
-                let _ = reader.read_line(&mut line);
-
-                let wal_command = serde_json::from_str::<WalCommand>(&line)?;
-
-                Ok(wal_command.value)
+                let result = self.wal.get_entry(*log_pointer)?;
+                Ok(result.value)
             }
             None => Ok(None),
         }
@@ -158,13 +147,9 @@ impl KvStore {
     pub fn remove(&mut self, key: String) -> Result<()> {
         match self.index.get(&key) {
             Some(_) => {
-                let mut serialized_command =
-                    serde_json::to_string(&WalCommand::new(KvAction::Rm, key.clone(), None))?;
+                self.wal
+                    .write(WalCommand::new(KvAction::Rm, key.clone(), None))?;
 
-                serialized_command.push('\n');
-
-                self.wal.file.write_all(serialized_command.as_bytes())?;
-                self.wal.file.flush()?;
                 self.index.remove(&key);
             }
             None => return Err(format_err!("Key not found")),
