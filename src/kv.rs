@@ -173,7 +173,16 @@ impl KvStore {
 
         let mut kv_store = KvStore::new(data_file);
 
-        let mut reader = BufReader::new(&mut kv_store.wal.file);
+        let next_write_location = kv_store.build_index()?;
+
+        kv_store.wal.set_write_marker_possition(next_write_location);
+
+        Ok(kv_store)
+    }
+
+    /// Build kv in memory index from a file and the target hashmap
+    fn build_index(&mut self) -> Result<u64> {
+        let mut reader = BufReader::new(&mut self.wal.file);
         let mut line = String::new();
 
         while let Ok(bytes) = reader.read_line(&mut line) {
@@ -187,10 +196,10 @@ impl KvStore {
 
             match wal_comnmand.action {
                 KvAction::Set => {
-                    kv_store.index.insert(wal_comnmand.key, position);
+                    self.index.insert(wal_comnmand.key, position);
                 }
                 KvAction::Rm => {
-                    kv_store.index.remove(&wal_comnmand.key);
+                    self.index.remove(&wal_comnmand.key);
                 }
                 // this can never happen so this to me is a signal
                 // we need to seperate data manipulation actions
@@ -201,12 +210,6 @@ impl KvStore {
             line.clear();
         }
 
-        // cant pass reader into the below as reader is already a
-        // mutable reference
-        let next_write_location = reader.stream_position()?;
-
-        kv_store.wal.set_write_marker_possition(next_write_location);
-
-        Ok(kv_store)
+        Ok(reader.stream_position()?)
     }
 }
