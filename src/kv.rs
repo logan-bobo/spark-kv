@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufRead;
 use std::io::{BufReader, Seek};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::wal::{KvAction, Wal, WalCommand};
 
@@ -39,10 +39,10 @@ impl KvStore {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn new(file: File) -> Self {
+    pub fn new(data_file: File) -> Self {
         Self {
             index: HashMap::new(),
-            wal: Wal::new(file, 0),
+            wal: Wal::new(data_file, 0),
         }
     }
 
@@ -69,19 +69,19 @@ impl KvStore {
     /// # }
     /// ```
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
-        let bytes_written = self.wal.write(WalCommand::new(
+        let command_first_byte = self.wal.write(WalCommand::new(
             KvAction::Set,
             key.clone(),
             Some(value.clone()),
         ))?;
 
-        // Update the index so the key points to the first
-        // byte of the command
-        self.index.insert(key, self.wal.get_write_marker());
+        self.index.insert(key, command_first_byte);
 
-        // move the write marker to the last byte of the command
-        // so we can begin our next wal event
-        self.wal.progress_write_marker(bytes_written);
+        if self.wal.should_compact()? {
+            self.wal.compact()?;
+            let stream_possition = self.build_index()?;
+            self.wal.set_write_marker_possition(stream_possition);
+        }
 
         Ok(())
     }
@@ -161,15 +161,15 @@ impl KvStore {
     /// opens a given path and creates the DB file if it does
     /// not exist this will be the persistent storage of the WAL
     /// replaying that wall to build an in memory index
-    pub fn open(path: impl Into<PathBuf>) -> Result<KvStore> {
-        let mut base_path: PathBuf = path.into();
-        base_path.push("kvs.db");
+    pub fn open(path: &Path) -> Result<KvStore> {
+        let mut data_path: PathBuf = PathBuf::from(path);
+        data_path.push("kvs.db");
 
         let data_file = std::fs::OpenOptions::new()
             .create(true)
             .read(true)
             .append(true)
-            .open(&base_path)?;
+            .open(&data_path)?;
 
         let mut kv_store = KvStore::new(data_file);
 
@@ -180,9 +180,11 @@ impl KvStore {
         Ok(kv_store)
     }
 
-    /// Build kv in memory index from a file and the target hashmap
+    /// Rebuild the Kv store internal index
     fn build_index(&mut self) -> Result<u64> {
-        let mut reader = BufReader::new(&mut self.wal.file);
+        self.wal.reset_reader()?;
+
+        let mut reader = BufReader::new(&mut self.wal.data_file);
         let mut line = String::new();
 
         while let Ok(bytes) = reader.read_line(&mut line) {
@@ -194,6 +196,14 @@ impl KvStore {
 
             let wal_comnmand = serde_json::from_str::<WalCommand>(&line)?;
 
+            // I might feel like I want to mess with this
+            // but DONT, this is a mental note to myself
+            // if you change how the index is built you could couple
+            // the index to the compactor!
+            //
+            // For example if you rely on the fact that the compactor has removed
+            // dead keys, then the compactor changes when it runs you could point to parial
+            // entry. index rebuilds should be able to be called infependant of compaction.
             match wal_comnmand.action {
                 KvAction::Set => {
                     self.index.insert(wal_comnmand.key, position);

@@ -2,10 +2,11 @@
 
 use failure::Error;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub struct WalCommand {
     pub action: KvAction,
     pub key: String,
@@ -19,7 +20,7 @@ impl WalCommand {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub enum KvAction {
     Set,
     Get,
@@ -28,26 +29,32 @@ pub enum KvAction {
 
 #[derive(Debug)]
 pub struct Wal {
-    pub file: File,
+    pub data_file: File,
     write_marker: u64,
 }
 
 impl Wal {
-    pub fn new(file: File, write_marker: u64) -> Self {
-        Self { file, write_marker }
+    pub fn new(data_file: File, write_marker: u64) -> Self {
+        Self {
+            data_file,
+            write_marker,
+        }
     }
 
     pub fn write(&mut self, command: WalCommand) -> Result<u64, Error> {
         let mut serialized_command = serde_json::to_string(&command)?;
         serialized_command.push('\n');
 
-        self.file.write_all(serialized_command.as_bytes())?;
-        self.file.flush()?;
+        let command_first_byte = self.get_write_marker();
 
-        Ok(serialized_command.len() as u64)
+        self.data_file.write_all(serialized_command.as_bytes())?;
+        self.data_file.flush()?;
+        self.progress_write_marker(serialized_command.len() as u64);
+
+        Ok(command_first_byte)
     }
 
-    pub fn get_write_marker(&self) -> u64 {
+    fn get_write_marker(&self) -> u64 {
         self.write_marker
     }
 
@@ -55,17 +62,67 @@ impl Wal {
         self.write_marker = byte;
     }
 
-    pub fn progress_write_marker(&mut self, bytes: u64) {
+    fn progress_write_marker(&mut self, bytes: u64) {
         self.write_marker += bytes;
     }
 
-    pub fn get_entry(&mut self, entry_first_byte: u64) -> Result<WalCommand, Error> {
-        self.file.seek(SeekFrom::Start(entry_first_byte))?;
+    pub fn reset_reader(&mut self) -> Result<(), Error> {
+        let _ = self.data_file.seek(SeekFrom::Start(0))?;
+        Ok(())
+    }
 
-        let mut reader = BufReader::new(&mut self.file);
+    pub fn should_compact(&mut self) -> Result<bool, Error> {
+        Ok(self.data_file.metadata()?.len() > 1000)
+    }
+
+    pub fn get_entry(&mut self, entry_first_byte: u64) -> Result<WalCommand, Error> {
+        self.data_file.seek(SeekFrom::Start(entry_first_byte))?;
+
+        let mut reader = BufReader::new(&mut self.data_file);
         let mut line = String::new();
         let _ = reader.read_line(&mut line);
 
         Ok(serde_json::from_str::<WalCommand>(&line)?)
+    }
+
+    pub fn compact(&mut self) -> Result<(), Error> {
+        self.reset_reader()?;
+
+        let mut new_mem_wal: HashMap<String, WalCommand> = HashMap::new();
+        let mut reader = BufReader::new(&mut self.data_file);
+        let mut line = String::new();
+
+        // Build a hash set of final wal command state
+        while let Ok(bytes) = reader.read_line(&mut line) {
+            if bytes == 0 {
+                break;
+            }
+
+            let wal_comnmand = serde_json::from_str::<WalCommand>(&line)?;
+
+            match wal_comnmand.action {
+                KvAction::Set => {
+                    new_mem_wal.insert(wal_comnmand.key.clone(), wal_comnmand);
+                }
+                KvAction::Rm => {
+                    new_mem_wal.remove(&wal_comnmand.key);
+                }
+                KvAction::Get => {}
+            }
+
+            line.clear();
+        }
+
+        self.data_file.set_len(0)?;
+        self.set_write_marker_possition(0);
+        self.reset_reader()?;
+
+        // what happens if we crash here
+        // partial compaction on a live file...
+        for command in new_mem_wal {
+            self.write(command.1)?;
+        }
+
+        Ok(())
     }
 }

@@ -285,15 +285,17 @@ fn compaction() -> Result<()> {
             current_size = new_size;
             continue;
         }
-        // Compaction triggered.
 
+        // Compaction triggered.
         drop(store);
+
         // reopen and check content.
         let mut store = KvStore::open(temp_dir.path())?;
         for key_id in 0..1000 {
             let key = format!("key{}", key_id);
             assert_eq!(store.get(key)?, Some(format!("{}", iter)));
         }
+
         return Ok(());
     }
 
