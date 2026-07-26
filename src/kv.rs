@@ -1,11 +1,11 @@
 #![deny(missing_docs)]
 
-use failure::{format_err, Error};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::BufRead;
-use std::io::{BufReader, Seek};
+use std::io::{BufRead, BufReader, Seek};
 use std::path::{Path, PathBuf};
+
+use failure::{format_err, Error};
 
 use crate::wal::{KvAction, Wal, WalCommand};
 

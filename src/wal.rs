@@ -1,10 +1,11 @@
 #![deny(missing_docs)]
 
-use failure::Error;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
+
+use failure::Error;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub struct WalCommand {
