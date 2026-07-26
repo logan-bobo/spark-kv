@@ -1,8 +1,9 @@
+use std::process::Command;
+
 use assert_cmd::prelude::*;
-use kvs::{KvStore, Result};
+use kvs::kv::{KvStore, Result};
 use predicates::ord::eq;
 use predicates::str::{contains, is_empty, PredicateStrExt};
-use std::process::Command;
 use tempfile::TempDir;
 use walkdir::WalkDir;
 
@@ -22,7 +23,8 @@ fn cli_version() {
         .stdout(contains(env!("CARGO_PKG_VERSION")));
 }
 
-// `kvs get <KEY>` should print "Key not found" for a non-existent key and exit with zero.
+// `kvs get <KEY>` should print "Key not found" for a non-existent key and exit
+// with zero.
 #[test]
 fn cli_get_non_existent_key() {
     let temp_dir = TempDir::new().unwrap();
@@ -35,7 +37,8 @@ fn cli_get_non_existent_key() {
         .stdout(eq("Key not found").trim());
 }
 
-// `kvs rm <KEY>` should print "Key not found" for an empty database and exit with non-zero code.
+// `kvs rm <KEY>` should print "Key not found" for an empty database and exit
+// with non-zero code.
 #[test]
 fn cli_rm_non_existent_key() {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
@@ -285,15 +288,17 @@ fn compaction() -> Result<()> {
             current_size = new_size;
             continue;
         }
-        // Compaction triggered.
 
+        // Compaction triggered.
         drop(store);
+
         // reopen and check content.
         let mut store = KvStore::open(temp_dir.path())?;
         for key_id in 0..1000 {
             let key = format!("key{}", key_id);
             assert_eq!(store.get(key)?, Some(format!("{}", iter)));
         }
+
         return Ok(());
     }
 
