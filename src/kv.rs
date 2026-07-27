@@ -67,11 +67,9 @@ impl KvStore {
     /// # }
     /// ```
     pub fn set(&mut self, key: String, value: String) -> Result<()> {
-        let command_first_byte = self.wal.write(WalCommand::new(
-            KvAction::Set,
-            key.clone(),
-            Some(value.clone()),
-        ))?;
+        let wal_command = WalCommand::new(KvAction::Set, key.clone(), Some(value));
+
+        let command_first_byte = self.wal.write(wal_command)?;
 
         self.index.insert(key, command_first_byte);
 
@@ -157,8 +155,8 @@ impl KvStore {
     }
 
     /// opens a given path and creates the DB file if it does
-    /// not exist this will be the persistent storage of the WAL
-    /// replaying that wall to build an in memory index
+    /// not exist this will be created writing the contents
+    /// of the DB to the in memory index
     pub fn open(path: &Path) -> Result<KvStore> {
         let mut data_path: PathBuf = PathBuf::from(path);
         data_path.push("kvs.db");
@@ -194,14 +192,6 @@ impl KvStore {
 
             let wal_comnmand = serde_json::from_str::<WalCommand>(&line)?;
 
-            // I might feel like I want to mess with this
-            // but DONT, this is a mental note to myself
-            // if you change how the index is built you could couple
-            // the index to the compactor!
-            //
-            // For example if you rely on the fact that the compactor has removed
-            // dead keys, then the compactor changes when it runs you could point to parial
-            // entry. index rebuilds should be able to be called infependant of compaction.
             match wal_comnmand.action {
                 KvAction::Set => {
                     self.index.insert(wal_comnmand.key, position);
@@ -209,9 +199,6 @@ impl KvStore {
                 KvAction::Rm => {
                     self.index.remove(&wal_comnmand.key);
                 }
-                // this can never happen so this to me is a signal
-                // we need to seperate data manipulation actions
-                // from data retrival actions... (the type is too wide)
                 KvAction::Get => {}
             }
 

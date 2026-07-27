@@ -68,6 +68,10 @@ impl Wal {
         self.write_marker += bytes;
     }
 
+    // Functions should never assume a reader possition
+    // They should always SeekFrom the start or the first
+    // byte of a command never follow on from another functions
+    // reader possition
     pub fn reset_reader(&mut self) -> Result<()> {
         let _ = self.data_file.seek(SeekFrom::Start(0))?;
         Ok(())
