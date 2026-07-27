@@ -5,12 +5,10 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Seek};
 use std::path::{Path, PathBuf};
 
-use failure::{format_err, Error};
-
 use crate::wal::{KvAction, Wal, WalCommand};
 
-/// wrap a generic return type with a dynamic error
-pub type Result<T> = std::result::Result<T, Error>;
+/// wrap a generic return type with a domain error
+pub type Result<T> = std::result::Result<T, KvError>;
 
 /// [KvStore] allows for the persistence of key value pairs to a WAL
 /// with fast retrival via an in memory index.
@@ -152,7 +150,7 @@ impl KvStore {
 
                 self.index.remove(&key);
             }
-            None => return Err(format_err!("Key not found")),
+            None => return Err(KvError::KeyNotFound),
         }
 
         Ok(())
@@ -222,4 +220,20 @@ impl KvStore {
 
         Ok(reader.stream_position()?)
     }
+}
+
+#[derive(thiserror::Error, Debug)]
+/// [KvError] represents the failure modes of the Kv server and Wal file it controlls
+pub enum KvError {
+    /// The key could not be found in the index or as a Wal entry
+    #[error("Key not found")]
+    KeyNotFound,
+
+    /// Internal I/O error when interacting with the Wal
+    #[error("I/O error: {0}")]
+    InternalIOError(#[from] std::io::Error),
+
+    /// Faulure to deserialize the given commend from the Wal
+    #[error("Could not deserialize command: {0}")]
+    CommandDeserializationError(#[from] serde_json::Error),
 }

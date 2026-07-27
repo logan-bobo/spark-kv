@@ -1,7 +1,9 @@
 use std::process::exit;
 
+use anyhow::Result;
+
 use clap::{Parser, Subcommand};
-use kvs::kv::{KvStore, Result};
+use kvs::kv::KvStore;
 
 #[derive(Parser, Debug)]
 #[command(name = env!("CARGO_PKG_NAME"), version, about, long_about = None)]
@@ -39,18 +41,16 @@ fn main() -> Result<()> {
 
 fn get_handler(value: &str, kvs: &mut KvStore) {
     match kvs.get(value.to_string()) {
-        Ok(result) => {
-            match result {
-                Some(inner_result) => {
-                    println!("{}", inner_result);
-                    exit(0)
-                }
-                None => {
-                    println!("Key not found");
-                    exit(0)
-                }
+        Ok(result) => match result {
+            Some(inner_result) => {
+                println!("{}", inner_result);
+                exit(0)
             }
-        }
+            None => {
+                println!("Key not found");
+                exit(0)
+            }
+        },
         Err(error) => {
             println!("{}", error);
             exit(1)
