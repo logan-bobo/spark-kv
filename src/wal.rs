@@ -4,7 +4,8 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 
-use failure::Error;
+use crate::kv::Result;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
@@ -42,7 +43,7 @@ impl Wal {
         }
     }
 
-    pub fn write(&mut self, command: WalCommand) -> Result<u64, Error> {
+    pub fn write(&mut self, command: WalCommand) -> Result<u64> {
         let mut serialized_command = serde_json::to_string(&command)?;
         serialized_command.push('\n');
 
@@ -67,16 +68,16 @@ impl Wal {
         self.write_marker += bytes;
     }
 
-    pub fn reset_reader(&mut self) -> Result<(), Error> {
+    pub fn reset_reader(&mut self) -> Result<()> {
         let _ = self.data_file.seek(SeekFrom::Start(0))?;
         Ok(())
     }
 
-    pub fn should_compact(&mut self) -> Result<bool, Error> {
+    pub fn should_compact(&mut self) -> Result<bool> {
         Ok(self.data_file.metadata()?.len() > 1000)
     }
 
-    pub fn get_entry(&mut self, entry_first_byte: u64) -> Result<WalCommand, Error> {
+    pub fn get_entry(&mut self, entry_first_byte: u64) -> Result<WalCommand> {
         self.data_file.seek(SeekFrom::Start(entry_first_byte))?;
 
         let mut reader = BufReader::new(&mut self.data_file);
@@ -86,7 +87,7 @@ impl Wal {
         Ok(serde_json::from_str::<WalCommand>(&line)?)
     }
 
-    pub fn compact(&mut self) -> Result<(), Error> {
+    pub fn compact(&mut self) -> Result<()> {
         self.reset_reader()?;
 
         let mut new_mem_wal: HashMap<String, WalCommand> = HashMap::new();
