@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
+use std::path::PathBuf;
 
 use crate::kv::Result;
 
@@ -31,14 +32,16 @@ pub enum KvAction {
 
 #[derive(Debug)]
 pub struct Wal {
-    pub data_file: File,
+    pub base_path: PathBuf,
+    pub current_data_file: File,
     write_marker: u64,
 }
 
 impl Wal {
-    pub fn new(data_file: File, write_marker: u64) -> Self {
+    pub fn new(base_path: PathBuf, current_data_file: File, write_marker: u64) -> Self {
         Self {
-            data_file,
+            base_path,
+            current_data_file,
             write_marker,
         }
     }
@@ -49,8 +52,10 @@ impl Wal {
 
         let command_first_byte = self.get_write_marker();
 
-        self.data_file.write_all(serialized_command.as_bytes())?;
-        self.data_file.flush()?;
+        self.current_data_file
+            .write_all(serialized_command.as_bytes())?;
+
+        self.current_data_file.flush()?;
         self.progress_write_marker(serialized_command.len() as u64);
 
         Ok(command_first_byte)
@@ -73,18 +78,19 @@ impl Wal {
     // byte of a command never follow on from another functions
     // reader possition
     pub fn reset_reader(&mut self) -> Result<()> {
-        let _ = self.data_file.seek(SeekFrom::Start(0))?;
+        let _ = self.current_data_file.seek(SeekFrom::Start(0))?;
         Ok(())
     }
 
     pub fn should_compact(&mut self) -> Result<bool> {
-        Ok(self.data_file.metadata()?.len() > 1000)
+        Ok(self.current_data_file.metadata()?.len() > 1000)
     }
 
     pub fn get_entry(&mut self, entry_first_byte: u64) -> Result<WalCommand> {
-        self.data_file.seek(SeekFrom::Start(entry_first_byte))?;
+        self.current_data_file
+            .seek(SeekFrom::Start(entry_first_byte))?;
 
-        let mut reader = BufReader::new(&mut self.data_file);
+        let mut reader = BufReader::new(&mut self.current_data_file);
         let mut line = String::new();
         let _ = reader.read_line(&mut line);
 
@@ -95,7 +101,7 @@ impl Wal {
         self.reset_reader()?;
 
         let mut new_mem_wal: HashMap<String, WalCommand> = HashMap::new();
-        let mut reader = BufReader::new(&mut self.data_file);
+        let mut reader = BufReader::new(&mut self.current_data_file);
         let mut line = String::new();
 
         // Build a hash set of final wal command state
@@ -119,7 +125,7 @@ impl Wal {
             line.clear();
         }
 
-        self.data_file.set_len(0)?;
+        self.current_data_file.set_len(0)?;
         self.set_write_marker_possition(0);
         self.reset_reader()?;
 

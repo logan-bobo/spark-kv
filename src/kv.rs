@@ -1,7 +1,7 @@
 #![deny(missing_docs)]
 
 use std::collections::HashMap;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Seek};
 use std::path::{Path, PathBuf};
 
@@ -37,10 +37,10 @@ impl KvStore {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn new(data_file: File) -> Self {
+    pub fn new(base_path: PathBuf, data_file: File) -> Self {
         Self {
             index: HashMap::new(),
-            wal: Wal::new(data_file, 0),
+            wal: Wal::new(base_path, data_file, 0),
         }
     }
 
@@ -156,20 +156,19 @@ impl KvStore {
 
     /// opens a given path and creates the DB file if it does
     /// not exist this will be created writing the contents
-    /// of the DB to the in memory index
+    /// of the DB to the in memory index.
     pub fn open(path: &Path) -> Result<KvStore> {
-        let mut data_path: PathBuf = PathBuf::from(path);
-        data_path.push("kvs.db");
+        let data_path = return_next_or_current_file(path)?;
 
-        let data_file = std::fs::OpenOptions::new()
+        let current_data_file = std::fs::OpenOptions::new()
             .create(true)
             .read(true)
             .append(true)
             .open(&data_path)?;
 
-        let mut kv_store = KvStore::new(data_file);
+        let mut kv_store = KvStore::new(current_data_file);
 
-        let next_write_location = kv_store.build_index()?;
+        let next_write_location = kv_store.build_index(&path)?;
 
         kv_store.wal.set_write_marker_possition(next_write_location);
 
@@ -209,9 +208,42 @@ impl KvStore {
     }
 }
 
+// TODO: The wal should own this one!
+fn return_next_or_current_file(path: &Path) -> Result<PathBuf> {
+    if !path.is_dir() {
+        return Err(KvError::DirectoryError);
+    }
+
+    let read_dir = fs::read_dir(path)?;
+
+    let mut watermark = 1;
+
+    for file in read_dir {
+        let file = file?;
+        if file.path().is_dir() {
+            continue;
+        } else {
+            if file.file_name().to_string_lossy().contains("kvs") && file.metadata()?.len() > 1000 {
+                watermark += 1;
+            }
+        }
+    }
+
+    let mut data_path: PathBuf = PathBuf::from(path);
+
+    data_path.push(format!("kvs-{}.db", watermark.to_string()));
+
+    Ok(data_path)
+}
+
 #[derive(thiserror::Error, Debug)]
 /// [KvError] represents the failure modes of the Kv server and Wal file it controlls
 pub enum KvError {
+    /// The key directory is not a valid directory, a [KvStore]
+    /// must be opened in a directory
+    #[error("invalid directory")]
+    DirectoryError,
+
     /// The key could not be found in the index or as a Wal entry
     #[error("Key not found")]
     KeyNotFound,
